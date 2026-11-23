@@ -2,11 +2,15 @@
   'use strict';
   const $ = id => document.getElementById(id);
   let token = null, reader = null, controller = null, expiry = null, generation = 0;
-  let busy = false;
+  let busy = false, imagePreview = '';
+  function closePreview() {
+    $('original-image').removeAttribute('src'); $('image-preview').hidden = true;
+  }
   const status = message => { $('status').textContent = message; };
   function error(message) { $('error').textContent = message; if (message) $('error').focus(); }
   function clear(message = '') {
     generation++; delete window.__archiveDiagnostic; controller?.abort(); controller = null; clearTimeout(expiry); expiry = null;
+    closePreview(); imagePreview = '';
     token = null; reader?.destroy(); reader = null;
     $('frame-host').replaceChildren(); $('workspace').hidden = true; $('login').hidden = false;
     $('file-link').removeAttribute('href'); $('download-link').removeAttribute('href'); $('download-link').removeAttribute('download'); $('open-file').hidden = true;
@@ -122,6 +126,12 @@
   $('logout').addEventListener('click', () => clear('已退出，当前页面资料已清空。'));
   $('home').addEventListener('click', () => { try { reader?.render(reader.entry()); } catch { error('无法打开入口。'); } });
   $('back').addEventListener('click', () => reader?.back());
+  $('close-preview').addEventListener('click', () => { closePreview(); $('file-link').focus(); });
+  $('file-link').addEventListener('click', event => {
+    if (!imagePreview) return;
+    event.preventDefault(); $('original-image').src = imagePreview; $('image-preview').hidden = false;
+    $('close-preview').focus(); $('image-preview').scrollIntoView({block:'start'});
+  });
   $('print').addEventListener('click', () => window.print());
   window.addEventListener('message', event => {
     if (!reader || !ArchiveCore.validMessage(event,reader.frame?.contentWindow,reader.nonce)) return;
@@ -129,11 +139,19 @@
     const target = ArchiveCore.resolve(event.data.ref, reader.current);
     if (!target) { error('该链接不可用。'); return; }
     try {
+      closePreview(); imagePreview = '';
       if (target.kind === 'local' && /\.html?$/i.test(target.path)) {
         reader.render(target.path,target.hash); $('open-file').hidden = true; error('');
       } else if (target.kind === 'external' || target.kind === 'local') {
         if (target.kind === 'local' && !reader.files.has(target.path)) throw Error('missing');
-        const url = target.kind === 'external' ? target.url : reader.asset(target.path)+target.hash;
+        let url = target.kind === 'external' ? target.url : reader.asset(target.path)+target.hash;
+        if (target.kind === 'local' && /^data:image\//.test(url)) {
+          imagePreview = url;
+          const type = url.slice(5,url.indexOf(';'));
+          // Image data URLs work as img sources but browsers block opening them as documents.
+          url = reader.blob(reader.files.get(target.path),type);
+        }
+        $('file-link').textContent = imagePreview ? '在本页查看原图' : target.kind === 'external' ? '打开外部链接' : '打开原件';
         $('file-link').href = url; $('open-file').hidden = false;
         $('download-link').hidden = target.kind === 'external';
         if (target.kind === 'local') { $('download-link').href = url; $('download-link').download = target.path.split('/').pop(); }
