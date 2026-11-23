@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   let token = null, reader = null, controller = null, expiry = null, generation = 0;
-  let selection = 0;
+  let selection = 0, navigationAction = 0, navigationSession = '', historyBusy = false;
   let busy = false;
   const preview = new ArchivePreview({onClose:()=>{
     selection++; status('');
@@ -14,7 +14,7 @@
   const status = message => { $('status').textContent = message; };
   function error(message) { $('error').textContent = message; if (message) $('error').focus(); }
   function clear(message = '') {
-    generation++; selection++; delete window.__archiveDiagnostic; controller?.abort(); controller = null; clearTimeout(expiry); expiry = null;
+    generation++; selection++; navigationAction++; navigationSession=''; historyBusy=false; $('frame-host').removeAttribute('aria-busy'); delete window.__archiveDiagnostic; controller?.abort(); controller = null; clearTimeout(expiry); expiry = null;
     preview.close({restore:false});
     token = null; reader?.destroy(); reader = null;
     $('frame-host').replaceChildren(); $('workspace').hidden = true; $('login').hidden = false;
@@ -154,7 +154,15 @@
           if(contents) for(const data of contents.values()) data.fill(0);
         }
       };
-      reader = new ArchiveReader(files,$('frame-host'),{assets,load}); files = null;
+      navigationSession = window.history?.replaceState ? crypto.randomUUID() : '';
+      const onNavigate=({index,push})=>{
+        if(!push || !navigationSession) return;
+        navigationAction++;
+        const state={archiveSession:navigationSession,archiveIndex:index};
+        try { if(index===0) window.history.replaceState(state,''); else window.history.pushState(state,''); }
+        catch { navigationSession=''; }
+      };
+      reader = new ArchiveReader(files,$('frame-host'),{assets,load,onNavigate}); files = null;
       reader.render(reader.entry());
       $('login').hidden = true; $('cancel').hidden = true; $('workspace').hidden = false; status('');
     } catch (e) {
@@ -174,13 +182,38 @@
   });
   $('cancel').addEventListener('click', () => clear('已取消，当前页面资料已清空。'));
   $('logout').addEventListener('click', () => clear('已退出，当前页面资料已清空。'));
+  window.addEventListener('popstate', async event => {
+    if(!reader || !navigationSession || event.state?.archiveSession!==navigationSession
+      || !Number.isInteger(event.state.archiveIndex) || event.state.archiveIndex<0 || event.state.archiveIndex>=reader.history.length) return;
+    const active=reader, action=++navigationAction, run=generation;
+    selection++; preview.close({restore:false});
+    historyBusy=true;const frame=active.frame; if(frame) frame.style.pointerEvents='none';$('frame-host').setAttribute('aria-busy','true');
+    try {
+      await active.capture();
+      if(reader!==active || action!==navigationAction || run!==generation) return;
+      active.go(event.state.archiveIndex); error(''); status('');
+    } finally {
+      if(action===navigationAction && run===generation) {
+        historyBusy=false;$('frame-host').removeAttribute('aria-busy');if(frame) frame.style.pointerEvents='';
+      }
+    }
+  });
   window.addEventListener('message', async event => {
-    if (!reader || !ArchiveCore.validMessage(event,reader.frame?.contentWindow,reader.nonce)) return;
+    if (historyBusy || !reader || !reader.ready || !ArchiveCore.validMessage(event,reader.frame?.contentWindow,reader.nonce)) return;
+    navigationAction++;
+    reader.saveState(event.data.state);
+    if(event.data.ref==='archive-home:' || event.data.ref==='archive-back:') {
+      selection++;preview.close({restore:false});
+      if(event.data.ref==='archive-home:') reader.home();
+      else if(navigationSession && window.history?.state?.archiveSession===navigationSession && window.history.state.archiveIndex===reader.cursor && reader.cursor>0) window.history.back();
+      else reader.back();
+      error('');status('');return;
+    }
     if (event.data.ref === 'archive-print:') { window.print(); return; }
     const target = ArchiveCore.resolve(event.data.ref, reader.current);
     if (!target) { error('该链接不可用。'); return; }
-    if(target.kind==='fragment' || (target.kind==='local' && target.path===reader.current && target.hash)) {
-      reader.frame.contentWindow.postMessage({type:'archive-scroll',nonce:reader.nonce,hash:target.hash},'*'); return;
+    if(target.kind==='fragment' || (target.kind==='local' && target.path===reader.current)) {
+      reader.frame.contentWindow.postMessage({type:'archive-scroll',nonce:reader.nonce,hash:target.hash || '#'},'*'); return;
     }
     const activeReader=reader, activeNonce=reader.nonce, activeRun=generation, ticket=++selection;
     let modalTicket;
