@@ -16,7 +16,9 @@
   async function request(url, options) {
     const response = await fetch(url, { cache:'no-store', credentials:'omit', redirect:'error', referrerPolicy:'no-referrer', ...options });
     if (!response.ok) {
-      const e = Error('request'); e.status = response.status; throw e;
+      const e = Error('request'); e.status = response.status;
+      try { const body = await response.json(); e.code = body.error_code; } catch {}
+      throw e;
     }
     return response;
   }
@@ -41,17 +43,19 @@
     busy = true; $('cancel').hidden = false; $('submit').disabled = true; $('login-form').setAttribute('aria-busy','true');
     controller = new AbortController(); const signal = controller.signal; const run = ++generation;
     let password = $('password').value; $('password').value = '';
-    let zip = null, files = null, auth = null;
+    let zip = null, files = null, auth = null, phase = 'config';
     try {
       status('正在登录…');
       const config = ArchiveCore.config(await (await request('config.json',{signal})).json());
+      phase = 'auth';
       auth = await (await request(config.url+'/auth/v1/token?grant_type=password', { method:'POST', signal, headers:{apikey:config.anonkey,'Content-Type':'application/json'}, body:JSON.stringify({email:config.loginEmail,password}) })).json();
       password = '';
       if (run !== generation) return;
       if (typeof auth.access_token !== 'string' || !Number.isFinite(auth.expires_in) || auth.expires_in <= 0) throw Error('auth');
       token = auth.access_token; const lifetime = auth.expires_in; auth = null;
       expiry = setTimeout(() => clear('登录已到期，请重新登录。'), Math.min(lifetime * 1000,2147483647));
-      status('正在下载私有资料，请稍候…');
+      phase = 'archive';
+      status('登录成功，正在下载私有资料，请稍候…');
       const object = [config.bucket,...config.archive_path.split('/')].map(encodeURIComponent).join('/');
       const objectUrl=config.url+'/storage/v1/object/authenticated/'+object;
       if (Number.isInteger(config.archiveBytes) && config.archiveBytes>0 && config.archiveBytes<=96*1024*1024) {
@@ -101,7 +105,11 @@
       $('login').hidden = true; $('cancel').hidden = true; $('workspace').hidden = false; status('资料已就绪，仅保留在当前页面内存中。');
     } catch (e) {
       if (run !== generation) return;
-      const message = e.status === 429 ? '请求过于频繁，请稍后再试。' : [400,401,422].includes(e.status) ? '登录失败或会话已失效，请核对用户名和密码。' : e.status === 403 ? '没有读取权限，请联系管理员核对授权。' : '无法加载资料：请检查网络、公开配置或私有归档入口。';
+      const message = e.status === 429 ? '请求过于频繁，请稍后再试。'
+        : phase === 'auth' && e.code === 'invalid_credentials' ? '用户名或密码不正确。密码未因页面更新而更改，请核对保存的登录信息。'
+        : phase === 'auth' ? '登录服务暂未完成验证，请检查网络后重试。'
+        : phase === 'archive' ? '账号验证已通过，但私有资料读取失败。请检查网络后重试；若持续失败，请反馈此提示，无需修改密码。'
+        : '登录配置未能加载，请检查网络后重新打开本站。';
       clear(); error(message);
     } finally {
       password = ''; auth = null;
