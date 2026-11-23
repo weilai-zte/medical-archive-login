@@ -57,14 +57,14 @@
       if (Number.isInteger(config.archiveBytes) && config.archiveBytes>0 && config.archiveBytes<=96*1024*1024) {
         // Bounded range requests avoid large-response proxy timeouts and show progress.
         zip=new ArrayBuffer(config.archiveBytes); const output=new Uint8Array(zip);
-        const chunk=2*1024*1024; let next=0,received=0;
+        const chunk=512*1024; let next=0,received=0;
         const worker=async()=>{
           while(next<config.archiveBytes){
             const start=next;next+=chunk;const end=Math.min(start+chunk,config.archiveBytes)-1;
             let bytes;
             for(let attempt=0;attempt<4;attempt++){
               try{
-                const response=await request(objectUrl,{signal,headers:{apikey:config.anonkey,Authorization:'Bearer '+token,Range:'bytes='+start+'-'+end}});
+                const response=await request(objectUrl,{signal:AbortSignal.any([signal,AbortSignal.timeout(20000)]),headers:{apikey:config.anonkey,Authorization:'Bearer '+token,Range:'bytes='+start+'-'+end}});
                 if(response.status!==206)throw Error('archive');
                 const range=response.headers.get('Content-Range');
                 if(range && range!=='bytes '+start+'-'+end+'/'+config.archiveBytes)throw Error('archive');
@@ -83,7 +83,7 @@
         };
         await Promise.all([worker(),worker(),worker()]);
       } else {
-        const response=await request(objectUrl,{signal,headers:{apikey:config.anonkey,Authorization:'Bearer '+token}});
+        const response=await request(objectUrl,{signal:AbortSignal.any([signal,AbortSignal.timeout(20000)]),headers:{apikey:config.anonkey,Authorization:'Bearer '+token}});
         if(Number(response.headers.get('Content-Length'))>96*1024*1024)throw Error('archive');
         zip=await response.arrayBuffer();
       }
