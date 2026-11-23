@@ -1,0 +1,10 @@
+{
+  "supabaseUrl": "https://jzymmkvcpexpnxcxzgxr.supabase.co",
+  "supabaseKey": "sb_publishable_O6sB_W5I6k31k2nVHa_5YQ_PoXe9v7w",
+  "bucket": "medical-archive",
+  "archivePath": "releases/archive-20261123-r001.zip",
+  "loginEmail": "owner@medical-archive.invalid",
+  "username": "weilai",
+  "archiveBytes": 50119526,
+  "archiveSha256": "c59a0ef22d430d98a929e62e958e096245c82caa8aad5cc3a2b040c94017a42b"
+}
