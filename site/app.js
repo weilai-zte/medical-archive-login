@@ -2,6 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   let token = null, reader = null, controller = null, expiry = null, generation = 0;
+  let selection = 0;
   let busy = false, imagePreview = '';
   function closePreview() {
     $('original-image').removeAttribute('src'); $('image-preview').hidden = true;
@@ -9,7 +10,7 @@
   const status = message => { $('status').textContent = message; };
   function error(message) { $('error').textContent = message; if (message) $('error').focus(); }
   function clear(message = '') {
-    generation++; delete window.__archiveDiagnostic; controller?.abort(); controller = null; clearTimeout(expiry); expiry = null;
+    generation++; selection++; delete window.__archiveDiagnostic; controller?.abort(); controller = null; clearTimeout(expiry); expiry = null;
     closePreview(); imagePreview = '';
     token = null; reader?.destroy(); reader = null;
     $('frame-host').replaceChildren(); $('workspace').hidden = true; $('login').hidden = false;
@@ -40,6 +41,58 @@
     }
     return files;
   }
+  async function download(config,signal,run,progress) {
+    let zip = null;
+    const transfer=new AbortController(), abortTransfer=()=>transfer.abort();
+    if(signal.aborted) transfer.abort(); else signal.addEventListener('abort',abortTransfer,{once:true});
+    try {
+      const object = [config.bucket,...config.archive_path.split('/')].map(encodeURIComponent).join('/');
+      const objectUrl=config.url+'/storage/v1/object/authenticated/'+object;
+      if (Number.isInteger(config.archiveBytes) && config.archiveBytes>0 && config.archiveBytes<=96*1024*1024) {
+        // Bounded range requests avoid large-response proxy timeouts and show progress.
+        zip=new ArrayBuffer(config.archiveBytes); const output=new Uint8Array(zip);
+        const chunk=512*1024; let next=0,received=0;
+        const worker=async()=>{
+          while(next<config.archiveBytes){
+            if(transfer.signal.aborted || signal.aborted || run!==generation) return;
+            const start=next;next+=chunk;const end=Math.min(start+chunk,config.archiveBytes)-1;
+            let bytes;
+            for(let attempt=0;attempt<4;attempt++){
+              try{
+                const response=await request(objectUrl,{signal:AbortSignal.any([transfer.signal,AbortSignal.timeout(20000)]),headers:{apikey:config.anonkey,Authorization:'Bearer '+token,Range:'bytes='+start+'-'+end}});
+                if(response.status!==206)throw Error('archive');
+                const range=response.headers.get('Content-Range');
+                if(range && range!=='bytes '+start+'-'+end+'/'+config.archiveBytes)throw Error('archive');
+                bytes=new Uint8Array(await response.arrayBuffer());
+                if(bytes.length!==end-start+1){bytes.fill(0);throw Error('archive');}
+                break;
+              }catch(e){
+                if(signal.aborted||transfer.signal.aborted||run!==generation||attempt===3||e.message==='archive'||(e.status&&e.status<500&&e.status!==429))throw e;
+                await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
+              }
+            }
+            if(transfer.signal.aborted || run!==generation){bytes.fill(0);return;}
+            output.set(bytes,start);received+=bytes.length;bytes.fill(0);
+            progress?.(Math.floor(received/config.archiveBytes*100));
+          }
+        };
+        const workers=[worker(),worker(),worker()];
+        try { await Promise.all(workers); } catch(e) { transfer.abort(); await Promise.allSettled(workers); throw e; }
+      } else {
+        const response=await request(objectUrl,{signal:AbortSignal.any([transfer.signal,AbortSignal.timeout(20000)]),headers:{apikey:config.anonkey,Authorization:'Bearer '+token}});
+        if(Number(response.headers.get('Content-Length'))>96*1024*1024)throw Error('archive');
+        zip=await response.arrayBuffer();
+      }
+      if(zip.byteLength>96*1024*1024)throw Error('archive');
+      if(config.archiveSha256){
+        const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',zip))).map(x=>x.toString(16).padStart(2,'0')).join('');
+        if(digest!==config.archiveSha256)throw Error('archive');
+      }
+
+      return zip;
+    } catch(e) { transfer.abort(); if(zip) new Uint8Array(zip).fill(0); throw e; }
+    finally { signal.removeEventListener('abort',abortTransfer); }
+  }
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;
     error('');
@@ -60,51 +113,44 @@
       expiry = setTimeout(() => clear('登录已到期，请重新登录。'), Math.min(lifetime * 1000,2147483647));
       phase = 'archive';
       status('登录成功，正在下载私有资料，请稍候…');
-      const object = [config.bucket,...config.archive_path.split('/')].map(encodeURIComponent).join('/');
-      const objectUrl=config.url+'/storage/v1/object/authenticated/'+object;
-      if (Number.isInteger(config.archiveBytes) && config.archiveBytes>0 && config.archiveBytes<=96*1024*1024) {
-        // Bounded range requests avoid large-response proxy timeouts and show progress.
-        zip=new ArrayBuffer(config.archiveBytes); const output=new Uint8Array(zip);
-        const chunk=512*1024; let next=0,received=0;
-        const worker=async()=>{
-          while(next<config.archiveBytes){
-            const start=next;next+=chunk;const end=Math.min(start+chunk,config.archiveBytes)-1;
-            let bytes;
-            for(let attempt=0;attempt<4;attempt++){
-              try{
-                const response=await request(objectUrl,{signal:AbortSignal.any([signal,AbortSignal.timeout(20000)]),headers:{apikey:config.anonkey,Authorization:'Bearer '+token,Range:'bytes='+start+'-'+end}});
-                if(response.status!==206)throw Error('archive');
-                const range=response.headers.get('Content-Range');
-                if(range && range!=='bytes '+start+'-'+end+'/'+config.archiveBytes)throw Error('archive');
-                bytes=new Uint8Array(await response.arrayBuffer());
-                if(bytes.length!==end-start+1){bytes.fill(0);throw Error('archive');}
-                break;
-              }catch(e){
-                if(signal.aborted||run!==generation||attempt===3||e.message==='archive'||(e.status&&e.status<500&&e.status!==429))throw e;
-                await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
-              }
-            }
-            if(run!==generation){bytes.fill(0);return;}
-            output.set(bytes,start);received+=bytes.length;bytes.fill(0);
-            status('正在下载私有资料… '+Math.floor(received/config.archiveBytes*100)+'%');
-          }
-        };
-        await Promise.all([worker(),worker(),worker()]);
-      } else {
-        const response=await request(objectUrl,{signal:AbortSignal.any([signal,AbortSignal.timeout(20000)]),headers:{apikey:config.anonkey,Authorization:'Bearer '+token}});
-        if(Number(response.headers.get('Content-Length'))>96*1024*1024)throw Error('archive');
-        zip=await response.arrayBuffer();
-      }
-      if(zip.byteLength>96*1024*1024)throw Error('archive');
-      if(config.archiveSha256){
-        const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',zip))).map(x=>x.toString(16).padStart(2,'0')).join('');
-        if(digest!==config.archiveSha256)throw Error('archive');
-      }
+      zip = await download(config,signal,run,p=>status('正在下载档案页面… '+p+'%'));
       if (run !== generation) return;
       status('正在内存中解压…'); await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve,0)));
       if (run !== generation) return;
       files = unpack(zip); new Uint8Array(zip).fill(0); zip = null;
-      reader = new ArchiveReader(files,$('frame-host')); files = null;
+      let assets = {};
+      if(files.has('__asset_manifest__.json')) {
+        const manifest=JSON.parse(new TextDecoder().decode(files.get('__asset_manifest__.json')));
+        if(manifest.version !== 1 || !manifest.assets || Array.isArray(manifest.assets) || Object.keys(manifest.assets).length>4096) throw Error('archive');
+        assets=manifest.assets;
+        let total=0;
+        for(const [path,item] of Object.entries(assets)) {
+          if(!item || typeof item!=='object' || files.has(path) || ArchiveCore.resolve('/'+path)?.path!==path || !/^releases\/lazy-[\w-]+\/assets\/[a-f0-9]{64}\.zip$/.test(item.objectPath)
+            || !/^[a-f0-9]{64}$/.test(item.sha256) || !/^[a-f0-9]{64}$/.test(item.originalSha256)
+            || !Number.isInteger(item.bytes) || item.bytes<=0 || item.bytes>96*1024*1024
+            || !Number.isInteger(item.originalBytes) || item.originalBytes<=0 || item.originalBytes>128*1024*1024 || (total+=item.originalBytes)>512*1024*1024
+            || !item.objectPath.endsWith('/'+item.originalSha256+'.zip')) throw Error('archive');
+        }
+      }
+      const load = async item => {
+        let bundle=null, contents=null, bytes=null;
+        try {
+          bundle=await download({...config,archive_path:item.objectPath,archiveBytes:item.bytes,archiveSha256:item.sha256},signal,run);
+          if(signal.aborted || run!==generation) throw Error('cancelled');
+          contents=unpack(bundle); new Uint8Array(bundle).fill(0); bundle=null;
+          if(contents.size!==1 || !contents.has('asset')) throw Error('archive');
+          bytes=contents.get('asset');
+          if(bytes.length!==item.originalBytes) throw Error('archive');
+          const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');
+          if(hash!==item.originalSha256 || signal.aborted || run!==generation) throw Error('archive');
+          contents.delete('asset'); const result=bytes; bytes=null; return result;
+        } finally {
+          if(bundle) new Uint8Array(bundle).fill(0);
+          if(bytes) bytes.fill(0);
+          if(contents) for(const data of contents.values()) data.fill(0);
+        }
+      };
+      reader = new ArchiveReader(files,$('frame-host'),{assets,load}); files = null;
       reader.render(reader.entry());
       $('login').hidden = true; $('cancel').hidden = true; $('workspace').hidden = false; status('资料已就绪，仅保留在当前页面内存中。');
     } catch (e) {
@@ -133,17 +179,23 @@
     $('close-preview').focus(); $('image-preview').scrollIntoView({block:'start'});
   });
   $('print').addEventListener('click', () => window.print());
-  window.addEventListener('message', event => {
+  window.addEventListener('message', async event => {
     if (!reader || !ArchiveCore.validMessage(event,reader.frame?.contentWindow,reader.nonce)) return;
     if (event.data.ref === 'archive-print:') { window.print(); return; }
     const target = ArchiveCore.resolve(event.data.ref, reader.current);
     if (!target) { error('该链接不可用。'); return; }
+    const activeReader=reader, activeNonce=reader.nonce, activeRun=generation, ticket=++selection;
     try {
       closePreview(); imagePreview = '';
       if (target.kind === 'local' && /\.html?$/i.test(target.path)) {
         reader.render(target.path,target.hash); $('open-file').hidden = true; error('');
       } else if (target.kind === 'external' || target.kind === 'local') {
-        if (target.kind === 'local' && !reader.files.has(target.path)) throw Error('missing');
+        const currentReader=reader, currentRun=generation, currentNonce=reader.nonce;
+        if (target.kind === 'local') {
+          status('正在读取所选原件…');
+          await reader.ensure(target.path);
+          if(reader!==currentReader || currentRun!==generation || reader.nonce!==currentNonce || ticket!==selection) return;
+        }
         let url = target.kind === 'external' ? target.url : reader.asset(target.path)+target.hash;
         if (target.kind === 'local' && /^data:image\//.test(url)) {
           imagePreview = url;
@@ -162,7 +214,9 @@
         // Explicit user click avoids sandbox popup restrictions and popup blockers.
         $('file-link').focus(); status('链接已准备好，请选择打开或下载。');
       }
-    } catch { error('链接目标不存在，或无法读取。'); }
+    } catch {
+      if(reader===activeReader && generation===activeRun && reader.nonce===activeNonce && ticket===selection) error('所选原件暂未读取成功，请再次点击重试。');
+    }
   });
   window.addEventListener('pagehide', () => clear());
   window.addEventListener('pageshow', event => { if (event.persisted) clear('请重新登录。'); });

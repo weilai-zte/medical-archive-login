@@ -8,6 +8,27 @@
     document.addEventListener('DOMContentLoaded', () => {
       if (hash) { try { document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView(); } catch {} }
       parent.postMessage({type:'archive-ready',nonce},'*');
+      const nodes = new Map();
+      const load = img => parent.postMessage({type:'archive-load',nonce,id:img.dataset.privateAsset},'*');
+      const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
+        for(const entry of entries) if(entry.isIntersecting) { observer.unobserve(entry.target); load(entry.target); }
+      },{rootMargin:'160px'}) : null;
+      for(const img of document.querySelectorAll('img[data-private-asset]')) {
+        nodes.set(img.dataset.privateAsset,img);
+        if(observer) observer.observe(img); else load(img);
+      }
+      window.addEventListener('message',event => {
+        if(event.source !== parent || event.data?.type !== 'archive-loaded' || event.data.nonce !== nonce) return;
+        const img = nodes.get(event.data.id); if(!img) return;
+        if(event.data.error) {
+          if(img.nextElementSibling?.dataset.retryFor === event.data.id) return;
+          const retry = document.createElement('button'); retry.type='button'; retry.dataset.retryFor=event.data.id;
+          retry.textContent='图片暂未加载，点击重试';
+          retry.addEventListener('click',()=>{retry.remove();load(img);}); img.after(retry);
+        } else if(typeof event.data.url === 'string' && /^data:image\//.test(event.data.url)) {
+          img.src=event.data.url; img.style.minHeight=''; nodes.delete(event.data.id);
+        }
+      });
     }, {once:true});
     const send = ref => parent.postMessage({ type:'archive-nav', nonce, ref }, '*');
     document.addEventListener('click', event => {
@@ -22,13 +43,38 @@
     window.print = () => send('archive-print:');
   }
   class Reader {
-    constructor(files, host) {
+    constructor(files, host, options = {}) {
+      this.assets = options.assets || {}; this.loader = options.load; this.inflight = new Map(); this.assetNodes = new Map(); this.destroyed = false;
       this.files = files; this.host = host; this.urls = new Set(); this.dataUrls = new Set(); this.cache = new Map(); this.history = []; this.nonce = ''; this.frame = null; this.loadTimer = null;
       this.onReady = event => {
-        if(event.source !== this.frame?.contentWindow || event.origin !== 'null' || event.data?.type !== 'archive-ready' || event.data.nonce !== this.nonce) return;
-        clearTimeout(this.loadTimer); this.notice?.remove();
+        if(event.source !== this.frame?.contentWindow || event.origin !== 'null' || event.data?.nonce !== this.nonce) return;
+        if(event.data.type === 'archive-ready') { clearTimeout(this.loadTimer); this.notice?.remove(); }
+        else if(event.data.type === 'archive-load' && this.assetNodes.has(event.data.id)) {
+          const frame=this.frame, nonce=this.nonce, id=event.data.id, path=this.assetNodes.get(id);
+          this.ensure(path).then(()=>{
+            if(this.destroyed || frame!==this.frame || nonce!==this.nonce) return;
+            frame.contentWindow.postMessage({type:'archive-loaded',nonce,id,url:this.asset(path)},'*');
+          }).catch(()=>{
+            if(this.destroyed || frame!==this.frame || nonce!==this.nonce) return;
+            frame.contentWindow.postMessage({type:'archive-loaded',nonce,id,error:true},'*');
+          });
+        }
       };
       window.addEventListener('message',this.onReady);
+    }
+    has(path) { return this.files.has(path) || Object.hasOwn(this.assets,path); }
+    async ensure(path) {
+      if(this.destroyed) throw Error('cancelled');
+      if(this.files.has(path)) return;
+      if(!Object.hasOwn(this.assets,path) || !this.loader) throw Error('missing');
+      if(!this.inflight.has(path)) {
+        const pending=this.loader(this.assets[path]).then(bytes=>{
+          if(this.destroyed) { bytes.fill(0); throw Error('cancelled'); }
+          this.files.set(path,bytes);
+        }).finally(()=>this.inflight.delete(path));
+        this.inflight.set(path,pending);
+      }
+      await this.inflight.get(path);
     }
     blob(data, type) {
       const url = URL.createObjectURL(new Blob([data], { type })); this.urls.add(url); return url;
@@ -98,11 +144,18 @@
     }
     render(path, hash = '', push = true) {
       if (!isHTML(path) || !this.files.has(path)) throw Error('missing');
+      this.assetNodes.clear();
       const doc = new DOMParser().parseFromString(new TextDecoder().decode(this.files.get(path)), 'text/html');
       doc.querySelectorAll('base,iframe,object,embed,meta[http-equiv],link[rel="preload"],link[rel="prefetch"],link[rel="modulepreload"]').forEach(el => el.remove());
       for (const el of doc.querySelectorAll('*')) {
         for (const attr of [...el.attributes]) {
-          if (['src','poster'].includes(attr.name)) el.setAttribute(attr.name, this.local(attr.value, path));
+          if (['src','poster'].includes(attr.name)) {
+            const target=resolve(attr.value,path);
+            if(el.localName==='img' && target?.kind==='local' && this.has(target.path) && !this.files.has(target.path)) {
+              const id='asset-'+this.assetNodes.size; this.assetNodes.set(id,target.path); el.setAttribute('data-private-asset',id);
+              el.removeAttribute('src'); el.style.minHeight='120px';
+            } else el.setAttribute(attr.name,this.local(attr.value,path));
+          }
           else if (attr.name === 'srcset') {
             el.setAttribute('srcset', attr.value.split(',').map(item => {
               const [ref, ...descriptor] = item.trim().split(/\s+/); const url = this.local(ref,path);
@@ -149,6 +202,7 @@
       this.history.pop(); const {path,hash} = this.history.at(-1); this.render(path,hash,false);
     }
     destroy() {
+      this.destroyed = true; this.assetNodes.clear(); this.inflight.clear(); this.assets = {}; this.loader = null;
       clearTimeout(this.loadTimer); window.removeEventListener('message',this.onReady);
       this.nonce = ''; this.frame?.remove(); this.frame = null; this.host.replaceChildren();
       for (const url of this.urls) URL.revokeObjectURL(url);
