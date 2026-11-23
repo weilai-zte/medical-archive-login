@@ -4,7 +4,11 @@
   const { resolve } = ArchiveCore;
   const mime = path => ({ css:'text/css', js:'text/javascript', svg:'image/svg+xml', png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp', avif:'image/avif', pdf:'application/pdf', woff:'font/woff', woff2:'font/woff2', ttf:'font/ttf', json:'application/json', txt:'text/plain' }[path.split('.').pop().toLowerCase()] || 'application/octet-stream');
   const isHTML = path => /\.html?$/i.test(path);
-  function bridge(nonce) {
+  function bridge(nonce, hash) {
+    document.addEventListener('DOMContentLoaded', () => {
+      if (hash) { try { document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView(); } catch {} }
+      parent.postMessage({type:'archive-ready',nonce},'*');
+    }, {once:true});
     const send = ref => parent.postMessage({ type:'archive-nav', nonce, ref }, '*');
     document.addEventListener('click', event => {
       const a = event.target.closest?.('a');
@@ -19,7 +23,12 @@
   }
   class Reader {
     constructor(files, host) {
-      this.files = files; this.host = host; this.urls = new Set(); this.dataUrls = new Set(); this.cache = new Map(); this.history = []; this.nonce = ''; this.frame = null;
+      this.files = files; this.host = host; this.urls = new Set(); this.dataUrls = new Set(); this.cache = new Map(); this.history = []; this.nonce = ''; this.frame = null; this.loadTimer = null;
+      this.onReady = event => {
+        if(event.source !== this.frame?.contentWindow || event.origin !== 'null' || event.data?.type !== 'archive-ready' || event.data.nonce !== this.nonce) return;
+        clearTimeout(this.loadTimer); this.notice?.remove();
+      };
+      window.addEventListener('message',this.onReady);
     }
     blob(data, type) {
       const url = URL.createObjectURL(new Blob([data], { type })); this.urls.add(url); return url;
@@ -118,15 +127,20 @@
       this.nonce = crypto.randomUUID();
       const policy = doc.createElement('meta'); policy.httpEquiv = 'Content-Security-Policy';
       policy.content = "default-src 'none'; script-src blob: data: 'unsafe-inline'; style-src blob: data: 'unsafe-inline'; img-src blob: data:; font-src blob: data:; media-src blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
-      const script = doc.createElement('script'); script.textContent = `(${bridge.toString()})(${JSON.stringify(this.nonce)});`;
+      const script = doc.createElement('script'); script.textContent = `(${bridge.toString()})(${JSON.stringify(this.nonce)},${JSON.stringify(hash)});`;
       doc.head.prepend(script); doc.head.prepend(policy);
       const frame = document.createElement('iframe');
       frame.title = '私人资料阅读区'; frame.setAttribute('sandbox','allow-scripts allow-downloads'); frame.referrerPolicy = 'no-referrer';
-      const previous = this.documentURL;
-      this.documentURL = this.blob('<!doctype html>\n'+doc.documentElement.outerHTML,'text/html');
-      frame.src = this.documentURL + hash;
-      this.host.replaceChildren(frame); this.frame = frame; this.current = path;
-      if (previous) { URL.revokeObjectURL(previous); this.urls.delete(previous); }
+      clearTimeout(this.loadTimer);
+      // srcdoc avoids Blob-document navigation failures in iOS embedded browsers.
+      // The sandbox retains an opaque origin; no private document URL is published.
+      frame.srcdoc = '<!doctype html>\n'+doc.documentElement.outerHTML;
+      this.notice = document.createElement('p'); this.notice.setAttribute('role','status');
+      this.notice.textContent = '正在显示档案内容…';
+      this.host.replaceChildren(this.notice,frame); this.frame = frame; this.current = path;
+      this.loadTimer = setTimeout(() => {
+        this.notice.textContent = '档案内容未能显示。请点“返回入口”重试；仍为空白时，请用手机自带的 Safari 浏览器打开本站。';
+      },15000);
       if (push) this.history.push({path,hash});
       frame.focus();
     }
@@ -135,6 +149,7 @@
       this.history.pop(); const {path,hash} = this.history.at(-1); this.render(path,hash,false);
     }
     destroy() {
+      clearTimeout(this.loadTimer); window.removeEventListener('message',this.onReady);
       this.nonce = ''; this.frame?.remove(); this.frame = null; this.host.replaceChildren();
       for (const url of this.urls) URL.revokeObjectURL(url);
       this.urls.clear(); this.dataUrls.clear(); this.cache.clear();
