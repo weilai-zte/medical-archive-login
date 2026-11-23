@@ -2,9 +2,9 @@
   "supabaseUrl": "https://jzymmkvcpexpnxcxzgxr.supabase.co",
   "supabaseKey": "sb_publishable_O6sB_W5I6k31k2nVHa_5YQ_PoXe9v7w",
   "bucket": "medical-archive",
-  "archivePath": "releases/lazy-20261123-r001/bootstrap.zip",
+  "archivePath": "releases/lazy-20261123-r002/bootstrap.zip",
   "loginEmail": "owner@medical-archive.invalid",
   "username": "weilai",
-  "archiveBytes": 834059,
-  "archiveSha256": "92b8e03211044edcc627788a7bf0336aaaa49db92d8ebea72ce8d21e14850b3d"
+  "archiveBytes": 864454,
+  "archiveSha256": "6279e7dfafd483fc0944a0e1b74d27928410a82371deeb5d7f03c153bd37bae6"
 }
