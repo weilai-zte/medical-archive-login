@@ -19,7 +19,7 @@ jobs:
           python3 - <<'PYCODE'
           from pathlib import Path
           files={str(p.relative_to('site')) for p in Path('site').rglob('*') if p.is_file()}
-          allowed={'index.html','styles.css','core.js','reader.js','app.js','config.json','vendor/fflate-0.8.2.min.js','vendor/fflate-LICENSE','.nojekyll','robots.txt'}
+          allowed={'index.html','styles.css','core.js','reader.js','app.js','config.json','vendor/fflate-0.8.2.min.js','vendor/fflate-LICENSE','preview.js','vendor/pdfjs-6.5.438/pdf.mjs','vendor/pdfjs-6.5.438/pdf.worker.mjs','vendor/pdfjs-6.5.438/LICENSE','.nojekyll','robots.txt'}
           assert files==allowed, 'Unexpected public files'
           PYCODE
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa

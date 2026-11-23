@@ -3,18 +3,22 @@
   const $ = id => document.getElementById(id);
   let token = null, reader = null, controller = null, expiry = null, generation = 0;
   let selection = 0;
-  let busy = false, imagePreview = '';
-  function closePreview() {
-    $('original-image').removeAttribute('src'); $('image-preview').hidden = true;
-  }
+  let busy = false;
+  const preview = new ArchivePreview({onClose:()=>{
+    selection++; status('');
+    if(reader?.frame) {
+      reader.frame.focus();
+      reader.frame.contentWindow.postMessage({type:'archive-focus',nonce:reader.nonce},'*');
+    }
+  }});
   const status = message => { $('status').textContent = message; };
   function error(message) { $('error').textContent = message; if (message) $('error').focus(); }
   function clear(message = '') {
     generation++; selection++; delete window.__archiveDiagnostic; controller?.abort(); controller = null; clearTimeout(expiry); expiry = null;
-    closePreview(); imagePreview = '';
+    preview.close({restore:false});
     token = null; reader?.destroy(); reader = null;
     $('frame-host').replaceChildren(); $('workspace').hidden = true; $('login').hidden = false;
-    $('file-link').removeAttribute('href'); $('download-link').removeAttribute('href'); $('download-link').removeAttribute('download'); $('open-file').hidden = true;
+
     $('password').value = ''; busy = false; $('submit').disabled = false; $('login-form').removeAttribute('aria-busy');
     $('cancel').hidden = true; status(message); error(''); $('username').focus();
   }
@@ -152,7 +156,7 @@
       };
       reader = new ArchiveReader(files,$('frame-host'),{assets,load}); files = null;
       reader.render(reader.entry());
-      $('login').hidden = true; $('cancel').hidden = true; $('workspace').hidden = false; status('资料已就绪，仅保留在当前页面内存中。');
+      $('login').hidden = true; $('cancel').hidden = true; $('workspace').hidden = false; status('');
     } catch (e) {
       if (run !== generation) return;
       const message = e.status === 429 ? '请求过于频繁，请稍后再试。'
@@ -170,52 +174,47 @@
   });
   $('cancel').addEventListener('click', () => clear('已取消，当前页面资料已清空。'));
   $('logout').addEventListener('click', () => clear('已退出，当前页面资料已清空。'));
-  $('home').addEventListener('click', () => { try { reader?.render(reader.entry()); } catch { error('无法打开入口。'); } });
-  $('back').addEventListener('click', () => reader?.back());
-  $('close-preview').addEventListener('click', () => { closePreview(); $('file-link').focus(); });
-  $('file-link').addEventListener('click', event => {
-    if (!imagePreview) return;
-    event.preventDefault(); $('original-image').src = imagePreview; $('image-preview').hidden = false;
-    $('close-preview').focus(); $('image-preview').scrollIntoView({block:'start'});
-  });
-  $('print').addEventListener('click', () => window.print());
   window.addEventListener('message', async event => {
     if (!reader || !ArchiveCore.validMessage(event,reader.frame?.contentWindow,reader.nonce)) return;
     if (event.data.ref === 'archive-print:') { window.print(); return; }
     const target = ArchiveCore.resolve(event.data.ref, reader.current);
     if (!target) { error('该链接不可用。'); return; }
+    if(target.kind==='fragment' || (target.kind==='local' && target.path===reader.current && target.hash)) {
+      reader.frame.contentWindow.postMessage({type:'archive-scroll',nonce:reader.nonce,hash:target.hash},'*'); return;
+    }
     const activeReader=reader, activeNonce=reader.nonce, activeRun=generation, ticket=++selection;
+    let modalTicket;
+    const stillCurrent=()=>reader===activeReader && generation===activeRun && reader.nonce===activeNonce && ticket===selection;
     try {
-      closePreview(); imagePreview = '';
       if (target.kind === 'local' && /\.html?$/i.test(target.path)) {
-        reader.render(target.path,target.hash); $('open-file').hidden = true; error('');
-      } else if (target.kind === 'external' || target.kind === 'local') {
-        const currentReader=reader, currentRun=generation, currentNonce=reader.nonce;
-        if (target.kind === 'local') {
-          status('正在读取所选原件…');
-          await reader.ensure(target.path);
-          if(reader!==currentReader || currentRun!==generation || reader.nonce!==currentNonce || ticket!==selection) return;
-        }
-        let url = target.kind === 'external' ? target.url : reader.asset(target.path)+target.hash;
-        if (target.kind === 'local' && /^data:image\//.test(url)) {
-          imagePreview = url;
-          const type = url.slice(5,url.indexOf(';'));
-          // Image data URLs work as img sources but browsers block opening them as documents.
-          const bytes = type === 'image/svg+xml'
-            ? Uint8Array.from(atob(imagePreview.slice(imagePreview.indexOf(',')+1)),c=>c.charCodeAt(0))
-            : reader.files.get(target.path);
-          url = reader.blob(bytes,type);
-        }
-        $('file-link').textContent = imagePreview ? '在本页查看原图' : target.kind === 'external' ? '打开外部链接' : '打开原件';
-        $('file-link').href = imagePreview ? '#' : url; $('open-file').hidden = false;
-        $('download-link').textContent = imagePreview.startsWith('data:image/svg+xml;') ? '下载净化后的图示' : '下载原件';
-        $('download-link').hidden = target.kind === 'external';
-        if (target.kind === 'local') { $('download-link').href = url; $('download-link').download = target.path.split('/').pop(); }
-        // Explicit user click avoids sandbox popup restrictions and popup blockers.
-        $('file-link').focus(); status('链接已准备好，请选择打开或下载。');
+        preview.close({restore:false}); reader.render(target.path,target.hash); error(''); status('');
+      } else if(target.kind==='external') {
+        modalTicket=preview.show('外部资料');
+        await preview.display({kind:'other',filename:'外部资料',url:target.url,downloadUrl:target.url,downloadLabel:'打开外部资料'},modalTicket);
+      } else if (target.kind === 'local') {
+        const filename=target.path.split('/').pop();
+        const showReport=async()=>{
+          modalTicket=preview.show(filename);
+          try {
+            await activeReader.ensure(target.path);
+            if(!stillCurrent()) return;
+            const url=activeReader.asset(target.path);
+            const isImage=/^data:image\//.test(url), isPDF=/\.pdf$/i.test(target.path);
+            let downloadUrl=url;
+            if(isImage) {
+              const type=url.slice(5,url.indexOf(';'));
+              const bytes=type==='image/svg+xml' ? Uint8Array.from(atob(url.slice(url.indexOf(',')+1)),c=>c.charCodeAt(0)) : activeReader.files.get(target.path);
+              downloadUrl=activeReader.blob(bytes,type);
+            }
+            await preview.display({kind:isImage?'image':isPDF?'pdf':'other',url,bytes:isPDF?activeReader.files.get(target.path):undefined,filename,downloadUrl,downloadLabel:url.startsWith('data:image/svg+xml;')?'下载净化后的图示':'下载原件'},modalTicket);
+          } catch {
+            if(stillCurrent()) preview.fail('所选原件暂未读取成功，请重试。',modalTicket,showReport);
+          }
+        };
+        await showReport();
       }
     } catch {
-      if(reader===activeReader && generation===activeRun && reader.nonce===activeNonce && ticket===selection) error('所选原件暂未读取成功，请再次点击重试。');
+      if(stillCurrent()) error('所选链接暂未打开，请重试。');
     }
   });
   window.addEventListener('pagehide', () => clear());

@@ -5,8 +5,23 @@
   const mime = path => ({ css:'text/css', js:'text/javascript', svg:'image/svg+xml', png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp', avif:'image/avif', pdf:'application/pdf', woff:'font/woff', woff2:'font/woff2', ttf:'font/ttf', json:'application/json', txt:'text/plain' }[path.split('.').pop().toLowerCase()] || 'application/octet-stream');
   const isHTML = path => /\.html?$/i.test(path);
   function bridge(nonce, hash) {
+    let lastAnchor = null;
+    const scrollToHash = hash => {
+      let id; try { id=decodeURIComponent(hash.slice(1)); } catch { return; }
+      if(!id) { window.scrollTo(0,0); return; }
+      const target=document.getElementById(id) || document.getElementsByName(id)[0];
+      if(!target) return;
+      for(let el=target;el;el=el.parentElement) if(el.tagName==='DETAILS') el.open=true;
+      if(!target.hasAttribute('tabindex')) target.setAttribute('tabindex','-1');
+      target.focus({preventScroll:true}); target.scrollIntoView({block:'start'});
+    };
+    window.addEventListener('message', event => {
+      if(event.source!==parent || event.data?.nonce!==nonce) return;
+      if(event.data.type==='archive-scroll' && typeof event.data.hash==='string') scrollToHash(event.data.hash);
+      if(event.data.type==='archive-focus' && lastAnchor?.isConnected) lastAnchor.focus({preventScroll:true});
+    });
     document.addEventListener('DOMContentLoaded', () => {
-      if (hash) { try { document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView(); } catch {} }
+      if (hash) scrollToHash(hash);
       parent.postMessage({type:'archive-ready',nonce},'*');
       const nodes = new Map();
       const load = img => parent.postMessage({type:'archive-load',nonce,id:img.dataset.privateAsset},'*');
@@ -36,8 +51,9 @@
       if (!a) return;
       const ref = a.getAttribute('data-archive-ref') || a.getAttribute('href') || a.getAttribute('xlink:href');
       if (!ref) { event.preventDefault(); return; }
-      if (ref.startsWith('#')) return;
-      event.preventDefault(); event.stopImmediatePropagation(); send(ref);
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (ref.startsWith('#')) { scrollToHash(ref); return; }
+      lastAnchor=a; send(ref);
     }, true);
     document.addEventListener('submit', event => event.preventDefault(), true);
     window.print = () => send('archive-print:');
@@ -192,7 +208,7 @@
       this.notice.textContent = '正在显示档案内容…';
       this.host.replaceChildren(this.notice,frame); this.frame = frame; this.current = path;
       this.loadTimer = setTimeout(() => {
-        this.notice.textContent = '档案内容未能显示。请点“返回入口”重试；仍为空白时，请用手机自带的 Safari 浏览器打开本站。';
+        this.notice.textContent = '档案内容未能显示。请刷新后重新登录；若仍为空白，请用手机自带的 Safari 浏览器打开本站。';
       },15000);
       if (push) this.history.push({path,hash});
       frame.focus();

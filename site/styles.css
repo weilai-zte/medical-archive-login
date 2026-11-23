@@ -1,3 +1,23 @@
 :root{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;color:#172e40;background:#f3f6f8;font-size:17px}body{margin:0}main{max-width:1440px;margin:auto;padding:24px}.card{max-width:420px;margin:8vh auto 24px;padding:28px;background:white;border:1px solid #b7c5cf;border-radius:14px}h1{font-size:1.65rem}p{line-height:1.7}label{display:block;margin-top:18px}input{box-sizing:border-box;width:100%;font:inherit;padding:12px;margin:6px 0;border:1px solid #61798a;border-radius:5px}button,a{touch-action:manipulation}button{font:inherit;min-height:44px;padding:9px 16px;border:1px solid #32536a;border-radius:6px;background:#214d69;color:#fff;cursor:pointer}button:disabled{opacity:.65;cursor:wait}form button{width:100%;margin-top:22px}nav{display:flex;flex-wrap:wrap;gap:10px}a{color:#154e80;padding:6px;display:inline-block} :focus-visible{outline:3px solid #a34b00;outline-offset:4px}#status,#error{max-width:900px;margin:12px auto}#error{color:#9d2020}iframe{display:block;width:100%;height:78vh;border:1px solid #a4b6c2;background:white} [hidden]{display:none!important}@media(max-width:480px){main{padding:12px}.card{padding:18px;margin-top:5vh}nav button{flex:1}}@media print{body{background:white}main{padding:0}nav,#reader-hint,#open-file,#status,#error,#login{display:none!important}iframe{height:100vh;border:0;width:100%}}
 
 #image-preview{margin:16px 0;padding:12px;border:1px solid #b7c5cf;border-radius:8px;background:white}#original-image{display:block;width:auto;max-width:100%;height:auto;margin:12px auto}
+/* The archive owns its navigation; the outer shell only offers sign out. */
+main:has(#workspace:not([hidden])){padding:0;max-width:none}
+.session-bar{height:44px;box-sizing:border-box;display:flex;justify-content:flex-end;align-items:center;padding:4px 16px;border-bottom:1px solid #d9e3e8;background:#fff}
+#logout{min-height:36px;padding:5px 12px;font-size:14px;border-color:transparent;background:transparent;color:#355e69}
+#frame-host iframe{width:100%;height:calc(100dvh - 44px);box-sizing:border-box;border:0}
+#report-preview{box-sizing:border-box;width:min(1200px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);padding:0;border:1px solid #c9d7de;border-radius:14px;color:#172e40;background:#fff;overflow:hidden}
+#report-preview::backdrop{background:rgba(15,33,43,.6)}
+.preview-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:1px solid #e0e7eb}
+.preview-head h2{font-size:18px;line-height:1.4;margin:0;overflow-wrap:anywhere}
+.preview-head button{background:#eef4f5;color:#244b57;border-color:#cedce0;flex-shrink:0}
+.preview-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 18px;background:#f7f9fa}
+.preview-tools button{min-width:42px;padding:6px;background:#fff;color:#244b57;border-color:#bdcfd6}
+#zoom-label{min-width:52px;text-align:center;font-size:14px;font-variant-numeric:tabular-nums}
+#download-link{margin-left:auto;font-size:15px;text-decoration:underline}
+#preview-status{margin:0;padding:8px 18px;font-size:15px}#preview-status:empty{display:none}
+#preview-retry{margin:8px 18px}
+#preview-content{max-height:calc(100dvh - 200px);min-height:120px;overflow:auto;overscroll-behavior:contain;padding:16px;box-sizing:border-box;background:#e9eef1}
+#original-image{display:block;max-width:none;height:auto;margin:0 auto;background:white}
+#pdf-pages canvas{display:block;margin:0 auto 16px;background:white;box-shadow:0 1px 5px #23374325}
+@media(max-width:600px){#report-preview{width:calc(100vw - 12px);max-height:calc(100dvh - 12px);border-radius:10px}.preview-head{padding:10px 12px}.preview-head h2{font-size:16px}.preview-tools{padding:6px 10px}#preview-content{padding:8px;max-height:calc(100dvh - 190px)}#download-link{padding:6px 0}}
