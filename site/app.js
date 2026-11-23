@@ -149,10 +149,14 @@
           imagePreview = url;
           const type = url.slice(5,url.indexOf(';'));
           // Image data URLs work as img sources but browsers block opening them as documents.
-          url = reader.blob(reader.files.get(target.path),type);
+          const bytes = type === 'image/svg+xml'
+            ? Uint8Array.from(atob(imagePreview.slice(imagePreview.indexOf(',')+1)),c=>c.charCodeAt(0))
+            : reader.files.get(target.path);
+          url = reader.blob(bytes,type);
         }
         $('file-link').textContent = imagePreview ? '在本页查看原图' : target.kind === 'external' ? '打开外部链接' : '打开原件';
-        $('file-link').href = url; $('open-file').hidden = false;
+        $('file-link').href = imagePreview ? '#' : url; $('open-file').hidden = false;
+        $('download-link').textContent = imagePreview.startsWith('data:image/svg+xml;') ? '下载净化后的图示' : '下载原件';
         $('download-link').hidden = target.kind === 'external';
         if (target.kind === 'local') { $('download-link').href = url; $('download-link').download = target.path.split('/').pop(); }
         // Explicit user click avoids sandbox popup restrictions and popup blockers.
